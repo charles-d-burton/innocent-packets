@@ -86,10 +86,19 @@ type tcpOption struct {
 	Data   []byte
 }
 
+type Job struct {
+	IP    string
+	Ports []int
+}
+
 func main() {
 	var filename string
+	var top int
+	var numWorkers int
 
 	flag.StringVar(&filename, "f", "", "list of ip addresses for delivery of goods")
+	flag.IntVar(&top, "top", 100, "Int for the top 10, 100, 1000 ports to send to")
+	flag.IntVar(&numWorkers, "workers", 1, "Set the number of worker threads to start")
 	flag.Parse()
 
 	f, err := os.OpenFile(filename, os.O_RDONLY, os.ModePerm)
@@ -111,18 +120,47 @@ func main() {
 
 	rand.Seed(time.Now().UnixNano())
 
-	buff := new(bytes.Buffer)
-	ports := generatePortList(top100Ports)
-	//get a random IP address from the list
+	var ports []int
+	switch top {
+	case 10:
+		ports = generatePortList(top10Ports)
+	case 100:
+		ports = generatePortList(top100Ports)
+	case 1000:
+		ports = generatePortList(top1000Ports)
+	default:
+		ports = generatePortList(top100Ports)
+
+	}
+
+	jobs := make(chan Job, 1000)
+	//Start the workers
+	for w := 1; w <= numWorkers; w++ {
+		go worker(w, jobs)
+	}
+
 	for {
+		//get a random IP address from the list
 		n := rand.Int() % len(ips)
 		ip := ips[n]
-		conn, err := net.Dial("ip4:tcp", ip)
+		var job Job
+		job.IP = ip
+		job.Ports = ports
+		jobs <- job
+	}
+
+}
+
+func worker(id int, jobs <-chan Job) {
+	fmt.Printf("starting worker %d\n", id)
+	buff := new(bytes.Buffer)
+	for j := range jobs {
+		conn, err := net.Dial("ip4:tcp", j.IP)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		for _, port := range ports {
+		for _, port := range j.Ports {
 			sport := uint16(rand.Intn(10000-65535) + 10000)
 			op := []tcpOption{
 				{
@@ -163,7 +201,6 @@ func main() {
 		}
 		conn.Close()
 	}
-
 }
 
 //Validate that IP address is valid
